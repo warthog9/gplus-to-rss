@@ -162,7 +162,13 @@ public class GplusToRssServlet extends HttpServlet {
 		feed.setTitle(filterContent(activityFeed.getTitle()));
 		feed.setDescription(filterContent(activityFeed.getTitle()));
 		feed.setLink("https://plus.google.com/" + googlePlusUserId + "/posts");
-		feed.setPublishedDate(new Date(activityFeed.getUpdated().getValue()));
+		if (activityFeed.getUpdated() != null) {
+			feed.setPublishedDate(new Date(activityFeed.getUpdated().getValue()));
+		}
+		else {
+			feed.setPublishedDate(new Date());
+		}
+		
 		List<SyndEntry> entries = new ArrayList<SyndEntry>();
 
 		// Processing G+ posts
@@ -275,8 +281,7 @@ public class GplusToRssServlet extends HttpServlet {
 		try {
 			response.setContentType("application/rss+xml");
 			response.setCharacterEncoding("UTF-8");
-			Writer responseWriter = null;
-			responseWriter = response.getWriter();
+			Writer responseWriter = response.getWriter();
 			output.output(feed, responseWriter);
 			responseWriter.close();
 		} catch (Exception e) {
