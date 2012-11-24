@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+
+		<title>Google+ To RSS As A Service</title>
+		<meta name="description" content="Get Google+ public posts as a RSS feed !"/>
+		<meta name="keywords" content="Google+, google, plus, RSS, service, free, SAAS"/>
+
+		<link type="text/css" href="css/ui-lightness/jquery-ui-1.8.18.custom.css" rel="stylesheet" />	
+		<link type="text/css" href="css/gplus-to-rss.css" rel="stylesheet" />	
+
+		<script type="text/javascript" src="js/jquery-1.7.1.min.js"></script>
+		<script type="text/javascript" src="js/jquery-ui-1.8.18.custom.min.js"></script>
+		<script type="text/javascript" src="js/gplus-to-rss.js"></script>
+	</head>
+	<body>
+		<table>
+			<tr>
+				<td><img src="images/gplus-to-rss.jpg" height="70px"/></td>
+				<td><h1>Google+ To RSS As A Service</h1></td>
+			</tr>
+		</table>
+		
+		<br/>
+
+		<section>
+			<article>
+
+				<div class="ui-dialog ui-widget ui-widget-content ui-corner-all" >
+					<div class="ui-dialog-titlebar ui-widget-header ui-corner-all ui-helper-clearfix"><span class="ui-dialog-title" id="ui-dialog-title-dialog">Get Google+ public posts as a RSS feed !</span></div>
+					<div id="dialog" class="ui-dialog-content ui-widget-content">
+						<form onsubmit="return getRss(this.googlePlusUserId.value);">
+							<label for="googlePlusUserId">Google+ User Id&nbsp;:</label>
+							<input type="text" class="text ui-widget-content ui-corner-all" name="googlePlusUserId" id="googlePlusUserId" size="25" />
+							<input type="submit" value="Get RSS" id="submit-button" />
+						</form>
+					</div>
+				</div>
+				
+				<br/>
+		
+				<div class="ui-dialog ui-widget ui-widget-content ui-corner-all">
+					<div class="ui-dialog-titlebar ui-widget-header ui-corner-all ui-helper-clearfix"><span class="ui-dialog-title" id="ui-dialog-title-dialog">How to use this service ?</span></div>
+					<div id="dialog" class="ui-dialog-content ui-widget-content" style="width: auto; min-height: 57.4px; height: auto;" >
+						To use this service, few steps :
+						<ol>
+							<li>Go to the Google+ profile page that you want as a RSS feed</li>
+							<li>Copy the Google+ user id of this profile :<br/><img src="images/google-plus-id.gif"/></li>
+							<li>Paste the Google+ user id into the gplus-to-rss form and click 'Get RSS'</li>
+							<li>Copy the result URL (in the address bar) and paste it in your favorite RSS Reader (like Google Reader for example)</li>
+						</ol>
+					</div>
+				</div>
+		
+				<br/>
+
+				<div class="ui-dialog ui-widget ui-widget-content ui-corner-all" >
+					<div class="ui-dialog-titlebar ui-widget-header ui-corner-all ui-helper-clearfix"><span class="ui-dialog-title" id="ui-dialog-title-dialog">Privacy Policy</span></div>
+					<div id="dialog" class="ui-dialog-content ui-widget-content" style="width: auto; min-height: 57.4px; height: auto;" >
+						<ul>
+							<li>Only the Google+ public posts are published on the RSS feed.</li>
+							<li>The private Google+ informations are not accessed by this service and are not provided or sold to a third party.</li>
+							<li>The public Google+ informations are not stored by this service and are not provided or sold to a third party.</li>
+						</ul>
+					</div>
+				</div>
+
+			</article>
+		</section>
+		
+		<br clear="all"/>
+
+	</body>
+</html>
+
+
