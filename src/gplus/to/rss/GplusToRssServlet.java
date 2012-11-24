@@ -34,13 +34,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
-import com.google.api.client.googleapis.services.GoogleKeyInitializer;
+import com.google.api.client.googleapis.services.CommonGoogleClientRequestInitializer;
 import com.google.api.client.http.javanet.NetHttpTransport;
-import com.google.api.client.json.jackson.JacksonFactory;
+import com.google.api.client.json.jackson2.JacksonFactory;
 import com.google.api.services.plus.Plus;
 import com.google.api.services.plus.model.Activity;
 import com.google.api.services.plus.model.Activity.PlusObject.Attachments;
 import com.google.api.services.plus.model.Activity.PlusObject.Attachments.Image;
+import com.google.api.services.plus.model.Activity.PlusObject.Attachments.Thumbnails;
 import com.google.api.services.plus.model.ActivityFeed;
 import com.sun.syndication.feed.synd.SyndContent;
 import com.sun.syndication.feed.synd.SyndContentImpl;
@@ -74,7 +75,7 @@ public class GplusToRssServlet extends HttpServlet {
 	public void doGet(HttpServletRequest request, HttpServletResponse response) throws IOException {
 		
 		// Check the URI
-		if (request.getPathInfo().trim().length() <= 1 || !request.getPathInfo().startsWith("/")) {
+		if (request.getPathInfo() == null || request.getPathInfo().trim().length() <= 1 || !request.getPathInfo().startsWith("/")) {
 			response.sendError(HttpServletResponse.SC_BAD_REQUEST, "No google+ user id. Url must be /rss/[googlePlusUserId]");
 			return;
 		}
@@ -91,20 +92,27 @@ public class GplusToRssServlet extends HttpServlet {
 		}
 		// Process the case when googlePlusUserId entered is a Google User Name
 		else if (!googlePlusUserId.matches("[0-9]+")) {
-			URL url = new URL("https://profiles.google.com/" + googlePlusUserId);
-			HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
-			urlConnection.setAllowUserInteraction(false);
-			urlConnection.setInstanceFollowRedirects(false);
-			urlConnection.connect();
-			int responseCode = urlConnection.getResponseCode();
-			if (responseCode == HttpServletResponse.SC_MOVED_PERMANENTLY) {
-				String locationHeader = urlConnection.getHeaderField("Location");
-				googlePlusUserId = locationHeader.substring(locationHeader.lastIndexOf('/') + 1);
-				response.sendRedirect("/rss/" + googlePlusUserId);
-				return;
+			try {
+				URL url = new URL("https://profiles.google.com/" + googlePlusUserId);
+				HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+				urlConnection.setAllowUserInteraction(false);
+				urlConnection.setInstanceFollowRedirects(false);
+				urlConnection.connect();
+				int responseCode = urlConnection.getResponseCode();
+				if (responseCode == HttpServletResponse.SC_MOVED_PERMANENTLY) {
+					String locationHeader = urlConnection.getHeaderField("Location");
+					googlePlusUserId = locationHeader.substring(locationHeader.lastIndexOf('/') + 1);
+					response.sendRedirect("/rss/" + googlePlusUserId);
+					return;
+				}
+				else {
+					LOGGER.error("Impossible to get userId from userName " + googlePlusUserId);
+					response.sendError(HttpServletResponse.SC_BAD_REQUEST, "You must enter a valid google+ user id");
+					return;
+				}
 			}
-			else {
-				LOGGER.error("Impossible to get userId from userName " + googlePlusUserId);
+			catch (IOException e) {
+				LOGGER.error("Impossible to get userId from userName " + googlePlusUserId, e);
 				response.sendError(HttpServletResponse.SC_BAD_REQUEST, "You must enter a valid google+ user id");
 				return;
 			}
@@ -159,14 +167,9 @@ public class GplusToRssServlet extends HttpServlet {
 		// Begin the RSS feed
 		SyndFeed feed = new SyndFeedImpl();
 		feed.setFeedType("rss_2.0");
-		feed.setTitle(filterContent(activityFeed.getTitle()));
-		feed.setDescription(filterContent(activityFeed.getTitle()));
 		feed.setLink("https://plus.google.com/" + googlePlusUserId + "/posts");
 		if (activityFeed.getUpdated() != null) {
 			feed.setPublishedDate(new Date(activityFeed.getUpdated().getValue()));
-		}
-		else {
-			feed.setPublishedDate(new Date());
 		}
 		
 		List<SyndEntry> entries = new ArrayList<SyndEntry>();
@@ -177,7 +180,22 @@ public class GplusToRssServlet extends HttpServlet {
 			boolean hasContent = post.getObject().getContent() != null && !post.getObject().getContent().trim().isEmpty();
 			boolean hasAttachments = post.getObject().getAttachments() != null && !post.getObject().getAttachments().isEmpty();
 
-			// Define feed title
+			// Define feed title (if it is usefull)
+			if (feed.getTitle() == null && post.getActor() != null && post.getActor().getDisplayName() != null && googlePlusUserId.equals(post.getActor().getId())) {
+				feed.setTitle(filterContent(post.getActor().getDisplayName()) + " - Google+ Posts");
+			}
+			
+			// Define feed published date
+			if (feed.getPublishedDate() == null) {
+				if (post.getUpdated() != null) {
+					feed.setPublishedDate(new Date(post.getUpdated().getValue()));
+				}
+				if (post.getPublished() != null) {
+					feed.setPublishedDate(new Date(post.getPublished().getValue()));
+				}
+			}
+			
+			// Define entry title
 			if (hasContent) {
 				entry.setTitle(filterContent(post.getTitle()));
 			}
@@ -192,7 +210,7 @@ public class GplusToRssServlet extends HttpServlet {
 			entry.setLink(post.getUrl());
 			entry.setPublishedDate(new Date(post.getPublished().getValue()));
 
-			// Define feed content
+			// Define entry content
 			SyndContent description = new SyndContentImpl();
 			description.setType("text/html");
 			StringBuilder contentBuilder = new StringBuilder();
@@ -213,13 +231,7 @@ public class GplusToRssServlet extends HttpServlet {
 					if (attachment.getObjectType().equals("article")) {
 
 						// Thumbnail ?
-						Image thumbnail = null;
-						if (i+1 < post.getObject().getAttachments().size()) {
-							Attachments nextAttachment = post.getObject().getAttachments().get(i+1);
-							if (nextAttachment.getObjectType().equals("photo") && nextAttachment.getFullImage() != null && attachment.getUrl().equals(nextAttachment.getFullImage().getUrl())) {
-								thumbnail = nextAttachment.getImage();
-							}
-						}
+						Image thumbnail = attachment.getImage();
 						
 						// Thumbnail Insertion
 						if (thumbnail != null) {
@@ -267,12 +279,43 @@ public class GplusToRssServlet extends HttpServlet {
 						              .append("</a>")
 						              .append("<br/>");
 					}
+					// Album Attachment
+					else if (attachment.getObjectType().equals("album")) {
+						String albumTitle = (attachment.getDisplayName() != null && !attachment.getDisplayName().isEmpty()) ? attachment.getDisplayName() : "Album";
+						contentBuilder.append("<a href='" + attachment.getUrl() + "'>")
+			              			  .append(albumTitle)
+			              			  .append("</a>")
+			              			  .append("<br/>");
+						if (attachment.getThumbnails() != null) {
+							boolean isFirstPhoto = true;
+							for (Thumbnails thumbnail : attachment.getThumbnails()) {
+								contentBuilder.append("<a href='" + thumbnail.getUrl() + "'>")
+					              			  .append("<img border='0' src='" + thumbnail.getImage().getUrl() + "'/>")
+					              			  .append("</a>")
+					              			  .append("   ");
+								if (isFirstPhoto) {
+									contentBuilder.append("<br/>");
+									isFirstPhoto = false;
+								}
+							}
+							contentBuilder.append("<br/>");
+						}
+					}
 				}
 			}
 			description.setValue(contentBuilder.toString());
 			entry.setDescription(description);
 
 			entries.add(entry);
+		}
+		
+		// Define default feed title, description and published date
+		if (feed.getTitle() == null) {
+			feed.setTitle(googlePlusUserId + " - Google+ Posts");
+		}
+		feed.setDescription(feed.getTitle());
+		if (feed.getPublishedDate() == null) {
+			feed.setPublishedDate(new Date());
 		}
 
 		// Generate and finally publish the RSS feed
@@ -303,9 +346,9 @@ public class GplusToRssServlet extends HttpServlet {
 		plusClients = new ArrayList<Plus>();
 		for (String googleApiKey : googleApiKeys) {
 			// Initialisation of Google+ Client
-			Plus plusClient = Plus.builder(new NetHttpTransport(), new JacksonFactory())
+			Plus plusClient = new Plus.Builder (new NetHttpTransport(), new JacksonFactory(), null)
 								  .setApplicationName("gplus-to-rss")
-								  .setJsonHttpRequestInitializer(new GoogleKeyInitializer(googleApiKey))
+								  .setGoogleClientRequestInitializer(new CommonGoogleClientRequestInitializer(googleApiKey))
 								  .build();
 			plusClients.add(plusClient);
 		}
