@@ -22,8 +22,10 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -52,7 +54,7 @@ import com.sun.syndication.feed.synd.SyndFeedImpl;
 import com.sun.syndication.io.SyndFeedOutput;
 
 /**
- * Servlet which exposes Google+ public posts of a user as a RSS feed
+ * Servlet which exposes Google+ public posts of a user/page/community as a RSS feed
  * 
  * @author Fabien Baligand
  */
@@ -62,12 +64,14 @@ public class GplusToRssServlet extends HttpServlet {
 
 	private static final String GOOGLE_API_KEY_INIT_PARAM_NAME = "googleApiKey";
 	private static final String GOOGLE_PLUS_PUBLIC_COLLECTION = "public";
+	private static final String CURRENT_GOOGLE_API_KEY_CACHE_KEY = "currentGoogleApiKey";
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(GplusToRssServlet.class);
 
-	/** Google+ API Client */
-	private List<Plus> plusClients;
-
+	/** Google+ API Clients */
+	private Map<String, Plus> plusClients;
+	
+	
 	/**
 	 * Get All Public G+ posts of requested user 
 	 * and publish them as a RSS feed
@@ -76,7 +80,7 @@ public class GplusToRssServlet extends HttpServlet {
 		
 		// Check the URI
 		if (request.getPathInfo() == null || request.getPathInfo().trim().length() <= 1 || !request.getPathInfo().startsWith("/")) {
-			response.sendError(HttpServletResponse.SC_BAD_REQUEST, "No google+ user id. Url must be /rss/[googlePlusUserId]");
+			response.sendError(HttpServletResponse.SC_BAD_REQUEST, "No Google+ user/page/community id. Url must be /rss/[googlePlusId]");
 			return;
 		}
 
@@ -93,6 +97,9 @@ public class GplusToRssServlet extends HttpServlet {
 		// Process the case when googlePlusUserId entered is a Google User Name
 		else if (!googlePlusUserId.matches("[0-9]+")) {
 			try {
+				if (googlePlusUserId.contains("@")) {
+					googlePlusUserId = googlePlusUserId.substring(0, googlePlusUserId.indexOf('@'));
+				}
 				URL url = new URL("https://profiles.google.com/" + googlePlusUserId);
 				HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
 				urlConnection.setAllowUserInteraction(false);
@@ -107,31 +114,40 @@ public class GplusToRssServlet extends HttpServlet {
 				}
 				else {
 					LOGGER.error("Impossible to get userId from userName " + googlePlusUserId);
-					response.sendError(HttpServletResponse.SC_BAD_REQUEST, "You must enter a valid google+ user id");
+					response.sendError(HttpServletResponse.SC_BAD_REQUEST, "You must enter a valid Google+ user/page/community id");
 					return;
 				}
 			}
 			catch (IOException e) {
 				LOGGER.error("Impossible to get userId from userName " + googlePlusUserId, e);
-				response.sendError(HttpServletResponse.SC_BAD_REQUEST, "You must enter a valid google+ user id");
+				response.sendError(HttpServletResponse.SC_BAD_REQUEST, "You must enter a valid Google+ user/page/community id");
 				return;
 			}
 		}
 		
-		// Get the public G+ posts 
+		// Get the public G+ posts (using several Google+ clients if quota is reached)
 		ActivityFeed activityFeed = null;
-		Iterator<Plus> plusClientIterator = plusClients.iterator();
 		String errorMessage = null;
 		int errorCode = 0;
+		int retryCount = 0;
+		String googleApiKey = null;
+		Plus plusClient = null;
 		
-		while (activityFeed == null && plusClientIterator.hasNext()) {
+		do {
 			try {
-				Plus plusClient = plusClientIterator.next();
+				googleApiKey = (retryCount == 0) ? getCurrentGoogleApiKey() : getNextGoogleApiKey();
+				plusClient = this.plusClients.get(googleApiKey);
+				++retryCount;
 				activityFeed = plusClient.activities().list(googlePlusUserId, GOOGLE_PLUS_PUBLIC_COLLECTION).execute();
-			} catch (GoogleJsonResponseException e) {
+			}
+			catch (GoogleJsonResponseException e) {
 				if (e.getDetails() != null && (e.getDetails().getCode() == 400 || e.getDetails().getCode() == 404)) {
 					LOGGER.warn("UserId is not valid or not found : " + googlePlusUserId, e);
 					errorCode = HttpServletResponse.SC_BAD_REQUEST;
+				}
+				else if (e.getDetails() != null && e.getDetails().getCode() == 403) {
+					LOGGER.error("Quota Exceeded for Google API Key : " + googleApiKey, e);
+					errorCode = HttpServletResponse.SC_FORBIDDEN;
 				}
 				else {
 					LOGGER.error("Error when trying to get public G+ posts of user " + googlePlusUserId, e);
@@ -151,16 +167,18 @@ public class GplusToRssServlet extends HttpServlet {
 				else {
 					errorMessage = e.getMessage();
 				}
-			} catch (IOException e) {
+			}
+			catch (IOException e) {
 				LOGGER.error("Error when trying to get public G+ posts of user " + googlePlusUserId, e);
 				errorMessage = e.getMessage();
 				errorCode = HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
 			}
 		}
+		while (activityFeed == null && retryCount < 2 && errorCode == HttpServletResponse.SC_FORBIDDEN);
 
 		// If it doesn't work with each google api key, we definitely abandon and raise an error to the client 
 		if (activityFeed == null) {
-			response.sendError(errorCode, "A technical error occured when trying to get public G+ posts of user " + googlePlusUserId + " : " + errorMessage);
+			response.sendError(errorCode, "A technical error occured when trying to get public G+ posts of user/page/community " + googlePlusUserId + " : " + errorMessage);
 			return;
 		}
 
@@ -214,6 +232,17 @@ public class GplusToRssServlet extends HttpServlet {
 			SyndContent description = new SyndContentImpl();
 			description.setType("text/html");
 			StringBuilder contentBuilder = new StringBuilder();
+			// ReShare Annotation
+			if (post.getAnnotation() != null) {
+				contentBuilder.append(post.getAnnotation()).append("<br/>");
+				if (hasContent) {
+					contentBuilder.append("<hr/>");
+					if (post.getObject().getActor() != null && post.getObject().getActor().getDisplayName() != null) {
+						contentBuilder.append(post.getObject().getActor().getDisplayName()).append(" originally shared:<br/>");
+					}
+				}
+			}
+			// Main Content
 			if (hasContent) {
 				contentBuilder.append(filterContent(post.getObject().getContent()))
 				              .append("<br/>");
@@ -223,18 +252,21 @@ public class GplusToRssServlet extends HttpServlet {
 			}
 			
 			if (hasAttachments) {
+
+				// Does article attachments must be unwrapped ?
+				boolean unwrapAttachments = (request.getParameter("unwrapAttachments") != null);
 				
 				for (int i=0 ; i < post.getObject().getAttachments().size() ; ++i) {
 					Attachments attachment = post.getObject().getAttachments().get(i);
 					
 					// Article Attachment
-					if (attachment.getObjectType().equals("article")) {
-
+					if (attachment.getObjectType() == null || attachment.getObjectType().equals("article")) {
+						
 						// Thumbnail ?
 						Image thumbnail = attachment.getImage();
 						
 						// Thumbnail Insertion
-						if (thumbnail != null) {
+						if (thumbnail != null && !unwrapAttachments) {
 							contentBuilder.append("<table cellspacing='10px'><tr valign='top'><td><img style='max-width: 150px; max-height: 150px;' ");
 							if (thumbnail.getWidth() != null && thumbnail.getWidth() > 150 && (thumbnail.getHeight() == null || thumbnail.getWidth() > thumbnail.getHeight())) {
 								contentBuilder.append("width='150px' ");
@@ -246,22 +278,25 @@ public class GplusToRssServlet extends HttpServlet {
 							              .append("</td><td>");
 						}
 						
-						// Content
+						// Link
 						String title = attachment.getDisplayName() != null ? filterContent(attachment.getDisplayName()) : "Article";
 						contentBuilder.append("<a href='" + attachment.getUrl() + "'>")
 						              .append(title)
 						              .append("</a>")
 						              .append("<br/>");
-						if (attachment.getContent() != null && !attachment.getContent().trim().isEmpty()) {
+						
+						// Abstract
+						if (attachment.getContent() != null && !attachment.getContent().trim().isEmpty() && !unwrapAttachments) {
 							contentBuilder.append(filterContent(attachment.getContent()))
 				              			  .append("<br/>");
 						}
 
-						if (thumbnail != null) {
+						if (thumbnail != null && !unwrapAttachments) {
 							contentBuilder.append("</td></tr></table>");
 							++i;
 						}
 					}
+					
 					// Photo Attachment
 					else if (attachment.getObjectType().equals("photo")) {
 						if (attachment.getFullImage() != null) {
@@ -272,13 +307,20 @@ public class GplusToRssServlet extends HttpServlet {
 						}
 						contentBuilder.append("<br/>");
 					}
+					
 					// Video Attachment
 					else if (attachment.getObjectType().equals("video")) {
-						contentBuilder.append("<a href='" + attachment.getUrl() + "'>")
-						              .append("<img border='0' src='" + attachment.getImage().getUrl() + "'/>")
-						              .append("</a>")
+						contentBuilder.append("<a href='" + attachment.getUrl() + "'>");
+						if (attachment.getImage() != null) {
+							contentBuilder.append("<img border='0' src='" + attachment.getImage().getUrl() + "'/>");
+						}
+						else {
+							contentBuilder.append(attachment.getDisplayName());
+						}
+						contentBuilder.append("</a>")
 						              .append("<br/>");
 					}
+					
 					// Album Attachment
 					else if (attachment.getObjectType().equals("album")) {
 						String albumTitle = (attachment.getDisplayName() != null && !attachment.getDisplayName().isEmpty()) ? attachment.getDisplayName() : "Album";
@@ -327,7 +369,8 @@ public class GplusToRssServlet extends HttpServlet {
 			Writer responseWriter = response.getWriter();
 			output.output(feed, responseWriter);
 			responseWriter.close();
-		} catch (Exception e) {
+		}
+		catch (Exception e) {
 			LOGGER.error("Error when posting RSS feed of user " + googlePlusUserId, e);
 			response.sendError(HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Google+ content cannot be published as RSS feed.");
 			return;
@@ -343,16 +386,70 @@ public class GplusToRssServlet extends HttpServlet {
 		String googleApiKeyParam = this.getServletConfig().getInitParameter(GOOGLE_API_KEY_INIT_PARAM_NAME);
 		String[] googleApiKeys = googleApiKeyParam.split(",");
 		
-		plusClients = new ArrayList<Plus>();
+		this.plusClients = new LinkedHashMap<String, Plus>();
 		for (String googleApiKey : googleApiKeys) {
 			// Initialisation of Google+ Client
 			Plus plusClient = new Plus.Builder (new NetHttpTransport(), new JacksonFactory(), null)
 								  .setApplicationName("gplus-to-rss")
 								  .setGoogleClientRequestInitializer(new CommonGoogleClientRequestInitializer(googleApiKey))
 								  .build();
-			plusClients.add(plusClient);
+			this.plusClients.put(googleApiKey, plusClient);
+		}
+	}
+	
+	/**
+	 * Returns the current Google API Key (in the list of potential Google API Keys) 
+	 */
+	private String getCurrentGoogleApiKey() {
+
+		// Get current Google API Key
+		String currentGoogleApiKey = (String) MemCacheHelper.get(CURRENT_GOOGLE_API_KEY_CACHE_KEY);
+		
+		// Define current Google API Key, if none already defined
+		if (currentGoogleApiKey == null) {
+			currentGoogleApiKey = this.plusClients.keySet().iterator().next();
+			MemCacheHelper.put(CURRENT_GOOGLE_API_KEY_CACHE_KEY, currentGoogleApiKey);
 		}
 
+		// Return the current Google API Key
+		return currentGoogleApiKey;
+	}
+	
+	/**
+	 * Returns the next Google API Key (in the list of potential Google API Keys) 
+	 */
+	private String getNextGoogleApiKey() {
+		
+		// Get current Google API Key
+		String currentGoogleApiKey = (String) MemCacheHelper.get(CURRENT_GOOGLE_API_KEY_CACHE_KEY);
+		if (currentGoogleApiKey == null) {
+			currentGoogleApiKey = this.plusClients.keySet().iterator().next();
+		}
+		
+		// Guess next Google API Key
+		String nextGoogleApiKey = null;
+		boolean takeNext = false;
+		Set<String> googleApiKeys = this.plusClients.keySet();
+		for (String googleApiKey : googleApiKeys) {
+			if (takeNext) {
+				nextGoogleApiKey = googleApiKey;
+				break;
+			}
+			else if (googleApiKey.equals(currentGoogleApiKey)) {
+				takeNext = true;
+			}
+		}
+		
+		// Process special case where current Google+ Client is the last client of the list
+		if (nextGoogleApiKey == null) {
+			nextGoogleApiKey = this.plusClients.keySet().iterator().next();
+		}
+		
+		// Update current Google API Key in cache
+		MemCacheHelper.put(CURRENT_GOOGLE_API_KEY_CACHE_KEY, nextGoogleApiKey);
+		
+		// Return the current Google API Key
+		return nextGoogleApiKey;
 	}
 	
 	/**

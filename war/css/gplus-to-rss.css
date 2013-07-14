@@ -34,6 +34,10 @@ input.ui-button {
 	padding: 0.1em 1em;
 }
 
+a.link {
+	color: #C77405;
+}
+
 @media only screen and (max-width: 750px) {
 	section {
 		width: 100%;
